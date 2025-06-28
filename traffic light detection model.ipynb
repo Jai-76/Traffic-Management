@@ -1,0 +1,131 @@
+import cv2
+import torch
+import numpy as np
+from time import sleep
+import threading
+
+def display_controls(frame, current_green, vehicle_count, emergency=False):
+    """Simulate traffic light status display on the video feed"""
+    # Create status overlay
+    status = f"Current Green: {current_green} | Vehicles: {vehicle_count}"
+    cv2.putText(frame, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    
+    if emergency:
+        cv2.putText(frame, "EMERGENCY VEHICLE DETECTED!", (10, 60), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    
+    # Show simulated traffic light
+    light_size = 40
+    margin = 20
+    colors = {'red': (0, 0, 255), 'yellow': (0, 255, 255), 'green': (0, 255, 0)}
+    
+    # Draw traffic light indicators
+    y_start = 80
+    for idx, direction in enumerate(['north', 'south', 'east', 'west']):
+        x_start = margin + (idx * (light_size + margin))
+        cv2.rectangle(frame, (x_start, y_start), (x_start + light_size, y_start + 100), (255, 255, 255), 2)
+        
+        # Active light
+        if direction == current_green:
+            cv2.circle(frame, (x_start + light_size//2, y_start + 75), 15, colors['green'], -1)
+        else:
+            cv2.circle(frame, (x_start + light_size//2, y_start + 25), 15, colors['red'], -1)
+
+    return frame
+
+class TrafficSystem:
+    def __init__(self):  # Fixed the constructor name here
+        # YOLO Model Setup
+        self.model = torch.hub.load('ultralytics/yolov5', 'yolov5n', pretrained=True)  # Using YOLOv5
+        self.vehicle_classes = ['car', 'truck', 'bus', 'motorcycle']
+        self.emergency_classes = ['fire truck', 'ambulance', 'police car']
+        
+        # Camera Setup (0 for default laptop camera)
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        
+        # System variables
+        self.current_green = 'north'
+        self.vehicle_counts = {d: 0 for d in ['north', 'south', 'east', 'west']}
+        self.emergency_detected = False
+        self.frame_skip = 3
+        self.running = True
+
+    def process_frame(self, frame):
+        """Process frame with YOLO and return counts"""
+        results = self.model(frame)
+        detections = results.pandas().xyxy[0]
+        
+        vehicle_count = 0
+        emergency = False
+        
+        for _, det in detections.iterrows():
+            if det['name'] in self.vehicle_classes:
+                vehicle_count += 1
+            if det['name'] in self.emergency_classes:
+                emergency = True
+                
+        return vehicle_count, emergency
+
+    def traffic_control_logic(self):
+        """Simulated traffic light timing logic"""
+        while self.running:
+            if self.emergency_detected:
+                print("Emergency priority: Green for EAST")
+                self.current_green = 'east'
+                sleep(15)
+                self.emergency_detected = False
+                continue
+            
+            # Calculate green time based on vehicle density
+            max_dir = max(self.vehicle_counts, key=self.vehicle_counts.get)
+            base_time = 10 + (self.vehicle_counts[max_dir] // 2)
+            green_time = min(base_time, 30)
+            
+            print(f"Green for {self.current_green} ({green_time}s) | Counts: {self.vehicle_counts}")
+            
+            # Cycle to next direction
+            directions = ['north', 'south', 'east', 'west']
+            self.current_green = directions[(directions.index(self.current_green) + 1) % 4]
+            sleep(green_time)
+
+    def run(self):
+        """Main processing loop"""
+        frame_count = 0
+        
+        # Start control logic in background
+        control_thread = threading.Thread(target=self.traffic_control_logic)
+        control_thread.start()
+        
+        try:
+            while self.running:
+                ret, frame = self.cap.read()
+                if not ret:
+                    continue
+                
+                frame_count += 1
+                if frame_count % self.frame_skip != 0:
+                    continue
+                
+                # Process frame
+                vehicle_count, emergency = self.process_frame(frame)
+                self.vehicle_counts[self.current_green] = vehicle_count
+                self.emergency_detected = emergency
+                
+                # Display simulation overlay
+                frame = display_controls(frame, self.current_green, vehicle_count, emergency)
+                cv2.imshow('Traffic System Simulation', frame)
+                
+                if cv2.waitKey(1) == ord('q'):
+                    self.running = False
+                    
+        finally:
+            self.cap.release()
+            cv2.destroyAllWindows()
+            print("System shutdown complete")
+
+if __name__ == '__main__':  # Corrected this part of the script
+    print("Starting Traffic System Simulation...")
+    system = TrafficSystem()
+    system.run()
